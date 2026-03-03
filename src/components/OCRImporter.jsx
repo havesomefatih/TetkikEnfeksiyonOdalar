@@ -30,12 +30,62 @@ const OCRImporter = ({ isOpen, onClose }) => {
         }
     };
 
+    const optimizeImage = (imageUrl) => {
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                let width = img.width;
+                let height = img.height;
+
+                // Max width/height for mobile memory constraints
+                const MAX_SIZE = 1600;
+                if (width > height) {
+                    if (width > MAX_SIZE) {
+                        height *= MAX_SIZE / width;
+                        width = MAX_SIZE;
+                    }
+                } else {
+                    if (height > MAX_SIZE) {
+                        width *= MAX_SIZE / height;
+                        height = MAX_SIZE;
+                    }
+                }
+
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+
+                // Draw normally
+                ctx.drawImage(img, 0, 0, width, height);
+
+                // Optional: basic grayscale/contrast to help OCR
+                const imageData = ctx.getImageData(0, 0, width, height);
+                const data = imageData.data;
+                for (let i = 0; i < data.length; i += 4) {
+                    const avg = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+                    // simple contrast boost
+                    const contrast = 1.2;
+                    const val = ((avg / 255 - 0.5) * contrast + 0.5) * 255;
+                    data[i] = data[i + 1] = data[i + 2] = val;
+                }
+                ctx.putImageData(imageData, 0, 0);
+
+                resolve(canvas.toDataURL('image/jpeg', 0.9));
+            };
+            img.src = imageUrl;
+        });
+    };
+
     const processImage = async () => {
         if (!image) return;
         setStatus('processing');
         setProgress(0);
 
         try {
+            // First step: Shrink and grayscale image so mobile browsers don't run out of memory for Tesseract WebAssembly
+            const optimizedImageUrl = await optimizeImage(image);
+
             const worker = await Tesseract.createWorker('tur+eng', 1, {
                 logger: m => {
                     if (m.status === 'recognizing text') {
@@ -44,7 +94,7 @@ const OCRImporter = ({ isOpen, onClose }) => {
                 }
             });
 
-            const { data: { text } } = await worker.recognize(image);
+            const { data: { text } } = await worker.recognize(optimizedImageUrl);
             await worker.terminate();
 
             parseText(text);
